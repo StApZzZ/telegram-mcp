@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 4 * * 1" # weekly, so CVEs published against the locked dependencies fail the build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.12.5"
+
+jobs:
+  tests:
+    name: Tests and DAST (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Lockfile matches server.py
+        run: uv lock --script server.py --check
+      - name: Export locked dependencies
+        run: uv export --script server.py --format requirements.txt --no-header > "$RUNNER_TEMP/requirements.txt"
+      - name: Unit tests
+        run: >-
+          uv run --no-project --python "${{ matrix.python }}" --with-requirements "$RUNNER_TEMP/requirements.txt"
+          --with pytest --with "httpx>=0.27" pytest -q --ignore tests/test_http_dast.py
+      - name: DAST (real server process probed over HTTP)
+        run: >-
+          uv run --no-project --python "${{ matrix.python }}" --with-requirements "$RUNNER_TEMP/requirements.txt"
+          --with pytest --with "httpx>=0.27" pytest -q tests/test_http_dast.py
+
+  sast:
+    name: SAST
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Ruff (incl. flake8-bandit rules)
+        run: uvx ruff@0.17.2 check .
+      - name: Bandit
+        run: uvx bandit@1.9.4 -r server.py
+      - name: Semgrep
+        run: >-
+          uvx semgrep@1.182.1 scan --metrics=off --error --exclude '*.lock'
+          --config p/python --config p/security-audit --config p/secrets --config p/owasp-top-ten .
+
+  dependencies:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Export locked dependencies
+        run: uv export --script server.py --format requirements.txt --no-header > "$RUNNER_TEMP/requirements.txt"
+      - name: pip-audit (OSV)
+        run: >-
+          uvx pip-audit@2.10.1 -r "$RUNNER_TEMP/requirements.txt" --disable-pip --require-hashes
+          --vulnerability-service osv --progress-spinner off
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Gitleaks (full history)
+        run: >-
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro"
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git /repo --redact --no-banner --exit-code 1

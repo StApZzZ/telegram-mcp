@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Python dependencies live in the PEP 723 header and server.py.lock, which Dependabot
+  # does not read; the weekly pip-audit run in CI covers them instead.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Let a release age a week before proposing it, so a compromised one has time to be caught.
+    cooldown:
+      default-days: 7

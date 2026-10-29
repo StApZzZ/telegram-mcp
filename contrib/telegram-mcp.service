@@ -1,0 +1,14 @@
+# systemd user unit: ~/.config/systemd/user/telegram-mcp.service
+# Adjust the uv and server.py paths in ExecStart to your checkout.
+[Unit]
+Description=Telegram MCP server (Streamable HTTP on 127.0.0.1:8733)
+
+[Service]
+ExecStart=%h/.local/bin/uv run --quiet --locked --script %h/mcp-repos/telegram-mcp/server.py --http
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+UMask=0077
+
+[Install]
+WantedBy=default.target
